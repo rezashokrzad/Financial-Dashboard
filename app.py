@@ -10,13 +10,25 @@ import plotly.graph_objs as go
 
 
 apple = yf.Ticker("AAPL")
+
 data = apple.history(
     # period="max",
     start="2020-01-01",
     end=time.strftime("%Y-%m-%d", time.localtime()),
     # interval="1d"
 )
-
+# Name of Campanies
+companies = {
+    'Apple (AAPL)': 'AAPL',
+    'Microsoft (MSFT)': 'MSFT',
+    'NVIDIA (NVDA)': 'NVDA',
+    'Alphabet (GOOGL)': 'GOOGL',
+    'Amazon (AMZN)': 'AMZN',
+    'Tesla (TSLA)': 'TSLA',
+    'Meta Platforms (META)': 'META',
+    'Johnson & Johnson (JNJ)': 'JNJ',
+    'Procter & Gamble (PG)': 'PG'
+}
 data["Day_of_week"] = data.index.day_name()
 data["Month"] = data.index.month
 data["Quarter"] = data.index.quarter
@@ -45,8 +57,27 @@ data['MACD_signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
 
 
 # Assume data is your DataFrame
-app = dash.Dash(__name__)
 
+app = dash.Dash(__name__)
+@app.callback(
+    Output('company-chart', 'figure'),
+    [Input('company-checklist', 'value')]
+)
+def update_chart(selected_symbols):
+    if not selected_symbols:  
+        return go.Figure()
+
+    sp500_market_cap = 35000000000000
+    weights = []
+    symbols = []
+
+    for symbol in selected_symbols:
+        market_cap = yf.Ticker(symbol).info['marketCap']
+        weights.append((market_cap / sp500_market_cap) * 100)
+        symbols.append(symbol)
+
+    data = go.Bar(x=weights, y=symbols, orientation='h', text=[f"{weight:.2f}%" for weight in weights], textposition='auto')
+    return {'data': [data], 'layout': go.Layout(title='S&P 500 Weight of Selected Companies')}
 app.layout = html.Div(children=[
     html.H1("Financial Market Analysis Dashboard"),
 
@@ -60,7 +91,18 @@ app.layout = html.Div(children=[
                   ],
                   'layout': go.Layout(title='Closing Prices with EMA')
               }),
-
+    # Bar Chart - sp500 weight visualization
+    html.H2("Select Companies to Analyze weight",style={'text-align':'center'}),
+    html.Div([
+        dcc.Checklist(
+            id='company-checklist',
+            options=[{'label': name, 'value': symbol} for name, symbol in companies.items()],
+            value=['AAPL','MSFT','NVDA','GOOGL','AMZN'],  # لیست خالی به‌عنوان مقدار اولیه
+            labelStyle={'display': 'inline-block', 'margin-right': '20px', 'margin-bottom': '10px', 'width': '200px'}
+        )
+    ], style={'display': 'flex', 'flex-wrap': 'wrap', 'max-width': '600px, "background-color": "#e5ecf6"'}),
+    dcc.Graph(id='company-chart'),
+    
     # Bar Chart - Market Trend by Day of Week
     dcc.Graph(id='bar-chart',
               figure=px.bar(data, x='Day_of_week', color='Market_trend',
