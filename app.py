@@ -1,99 +1,271 @@
-import yfinance as yf
-import time
-import pandas as pd
 import dash
-import dash_core_components as dcc
-import dash_html_components as html
-from dash.dependencies import Input, Output
+from dash import dcc, html, Input, Output, dash_table
 import plotly.express as px
-import plotly.graph_objs as go
+import yfinance as yf
+import pandas as pd
 
+# Lists of stocks in different sectors
+hardware_tickers = ['AAPL', 'NVDA', 'INTC']
+software_tickers = ['MSFT', 'ORCL', 'ADBE']
+digital_media_tickers = ['GOOGL', 'META', 'NFLX']
+crypto_tickers = ['BTC-USD', 'DOGE-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD']  # Cryptocurrencies
 
-apple = yf.Ticker("AAPL")
-data = apple.history(
-    # period="max",
-    start="2020-01-01",
-    end=time.strftime("%Y-%m-%d", time.localtime()),
-    # interval="1d"
-)
+# Download data for S&P 500 and NASDAQ
+index_tickers = ['^GSPC', '^IXIC']  # S&P 500 and NASDAQ
+index_data = yf.download(index_tickers, period="5d")
+index_data = index_data.ffill().bfill()
 
-data["Day_of_week"] = data.index.day_name()
-data["Month"] = data.index.month
-data["Quarter"] = data.index.quarter
+# Function to fetch stock data
+def fetch_stock_data(tickers):
+    data = yf.download(tickers, period="5d")
+    data = data.ffill().bfill()
+    return data
 
-data["Volume_category"] = pd.cut(data["Volume"], bins=[0, 6e7, 9e7, float('inf')], labels=["Low", "Medium", "High"])
+# Fetch data for each sector and cryptocurrencies
+hardware_data = fetch_stock_data(hardware_tickers)
+software_data = fetch_stock_data(software_tickers)
+digital_media_data = fetch_stock_data(digital_media_tickers)
+crypto_data = fetch_stock_data(crypto_tickers)
 
-data["Market_trend"] = pd.cut(data['Close'] - data['Open'], bins=[-float('inf'), 0, float('inf')], labels=['Bearish', 'Bullish'])
+# Combine all data
+all_data = pd.concat([hardware_data, software_data, digital_media_data, crypto_data], axis=1)
 
-def compute_RSI(data, window=14):
-    delta = data['Close'].diff()
-    U = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    D = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    RS = U / D
-    RSI = 100 - (100 / (1 + RS))
-    return RSI
+# Calculate percentage change for the last day
+pct_change = all_data['Close'].pct_change().iloc[-1] * 100
 
-data['RSI'] = compute_RSI(data)
+# Identify bullish and bearish stocks
+bullish_stocks = pct_change[pct_change > 0].sort_values(ascending=False)
+bearish_stocks = pct_change[pct_change < 0].sort_values(ascending=False)
 
-data['rolling_mean_7'] = data['Close'].rolling(window=7).mean().fillna(0)
-data['rolling_std_7'] = data['Close'].rolling(window=7).std()
+# Select top 10 growth stocks
+top_growth_stocks = pct_change.sort_values(ascending=False).head(10)
 
-data['EMA_12'] = data['Close'].ewm(span=12, adjust=False).mean()
-data['EMA_26'] = data['Close'].ewm(span=26, adjust=False).mean()
-data['MACD'] = data['EMA_12'] - data['EMA_26']
-data['MACD_signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
+# Extract important metrics for each sector
+def extract_metrics(tickers):
+    metrics = {}
+    for ticker in tickers:
+        stock_info = yf.Ticker(ticker).info
+        metrics[ticker] = {
+            'Market Cap': pd.to_numeric(stock_info.get('marketCap', 0), errors='coerce'),
+            'P/E Ratio': pd.to_numeric(stock_info.get('trailingPE', 0), errors='coerce'),
+            'Volume': pd.to_numeric(stock_info.get('volume', 0), errors='coerce'),
+            'EPS (ttm)': pd.to_numeric(stock_info.get('trailingEps', 0), errors='coerce'),
+            '52 Week High': pd.to_numeric(stock_info.get('fiftyTwoWeekHigh', 0), errors='coerce'),
+            'Sales Y/Y': pd.to_numeric(stock_info.get('revenueGrowth', 0), errors='coerce'),
+            'Profit Margin': pd.to_numeric(stock_info.get('profitMargins', 0), errors='coerce'),
+            'Target Price': pd.to_numeric(stock_info.get('targetMeanPrice', 0), errors='coerce'),
+            '52 Week Low': pd.to_numeric(stock_info.get('fiftyTwoWeekLow', 0), errors='coerce'),
+            'EPS Y/Y TTM': pd.to_numeric(stock_info.get('earningsGrowth', 0), errors='coerce'),
+            'Forward P/E': pd.to_numeric(stock_info.get('forwardPE', 0), errors='coerce'),
+            'Beta': pd.to_numeric(stock_info.get('beta', 0), errors='coerce'),
+            'Avg Volume': pd.to_numeric(stock_info.get('averageVolume', 0), errors='coerce')
+        }
+    return pd.DataFrame(metrics).T
 
+hardware_metrics = extract_metrics(hardware_tickers)
+software_metrics = extract_metrics(software_tickers)
+digital_media_metrics = extract_metrics(digital_media_tickers)
+crypto_metrics = extract_metrics(crypto_tickers)  # For cryptocurrencies
 
-# Assume data is your DataFrame
+# Adding S&P 500 and NASDAQ indices to the data
+index_metrics = extract_metrics(index_tickers)
+
+# Start building the Dash app
 app = dash.Dash(__name__)
 
-app.layout = html.Div(children=[
-    html.H1("Financial Market Analysis Dashboard"),
+# مسیر به فایل favicon
+app._favicon = "assets/favicon.ico"
 
-    # Line Chart - Close Prices with Moving Averages
-    dcc.Graph(id='line-chart',
-              figure={
-                  'data': [
-                      go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close'),
-                      go.Scatter(x=data.index, y=data['EMA_12'], mode='lines', name='EMA_12'),
-                      go.Scatter(x=data.index, y=data['EMA_26'], mode='lines', name='EMA_26'),
-                  ],
-                  'layout': go.Layout(title='Closing Prices with EMA')
-              }),
+app.layout = html.Div(style={'backgroundColor': '#2E2E2E', 'color': 'white', 'fontFamily': 'Arial'}, children=[
+    html.Link(href='https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css', rel='stylesheet'),
+    
+    # Buttons for Bullish, Bearish, Top 10 Growth Stocks, and Cryptocurrencies
+    html.Div([
+        html.Button('Bullish Stocks', id='bullish-button', n_clicks=0, className='btn btn-success',
+                    style={'margin': '10px', 'borderRadius': '5px', 'color': '#2E2E2E', 'backgroundColor': '#5CDB95'}),
+        html.Button('Bearish Stocks', id='bearish-button', n_clicks=0, className='btn btn-danger',
+                    style={'margin': '10px', 'borderRadius': '5px', 'color': '#2E2E2E', 'backgroundColor': '#FC4445'}),
+        html.Button('Top 10 Growth Stocks', id='top10-button', n_clicks=0, className='btn btn-primary',
+                    style={'margin': '10px', 'borderRadius': '5px', 'color': '#2E2E2E', 'backgroundColor': '#3B9AE1'}),
+        html.Button('Cryptocurrencies', id='crypto-button', n_clicks=0, className='btn btn-warning',
+                    style={'margin': '10px', 'borderRadius': '5px', 'color': '#2E2E2E', 'backgroundColor': '#FFD700'})
+    ], className='button-group', style={'textAlign': 'center', 'padding': '20px'}),
 
-    # Bar Chart - Market Trend by Day of Week
-    dcc.Graph(id='bar-chart',
-              figure=px.bar(data, x='Day_of_week', color='Market_trend',
-                            title="Market Trend by Day of the Week")),
+    html.Div(id='summary-content', style={'padding': '20px', 'textAlign': 'center'}),
 
-    # Trend Chart - MACD and MACD Signal
-    dcc.Graph(id='trend-chart',
-              figure={
-                  'data': [
-                      go.Scatter(x=data.index, y=data['MACD'], mode='lines', name='MACD'),
-                      go.Scatter(x=data.index, y=data['MACD_signal'], mode='lines', name='MACD Signal')
-                  ],
-                  'layout': go.Layout(title='MACD vs MACD Signal')
-              }),
+    # Dropdowns and chart for sector and metrics comparison
+    html.Div([
+        dcc.Dropdown(
+            id='sector-selector',
+            options=[
+                {'label': 'Hardware', 'value': 'Hardware'},
+                {'label': 'Software', 'value': 'Software'},
+                {'label': 'Digital Media & Online Advertising', 'value': 'Digital Media'}
+            ],
+            value=['Hardware'],  # Default value
+            multi=True,  # Allow multiple selections
+            className='dropdown',
+            style={'backgroundColor': '#FFF', 'color': '#000', 'border': '1px solid #CCC', 'borderRadius': '4px', 'padding': '5px', 'marginBottom': '10px'}
+        ),
+        
+        dcc.Dropdown(
+            id='metric-selector',
+            options=[
+                {'label': 'Market Cap', 'value': 'Market Cap'},
+                {'label': 'P/E Ratio', 'value': 'P/E Ratio'},
+                {'label': 'Volume', 'value': 'Volume'},
+                {'label': 'EPS (ttm)', 'value': 'EPS (ttm)'},
+                {'label': '52 Week High', 'value': '52 Week High'},
+                {'label': 'Sales Y/Y', 'value': 'Sales Y/Y'},
+                {'label': 'Profit Margin', 'value': 'Profit Margin'},
+                {'label': 'Target Price', 'value': 'Target Price'},
+                {'label': '52 Week Low', 'value': '52 Week Low'},
+                {'label': 'EPS Y/Y TTM', 'value': 'EPS Y/Y TTM'},
+                {'label': 'Forward P/E', 'value': 'Forward P/E'},
+                {'label': 'Price', 'value': 'Price'}
+            ],
+            value='Market Cap',  # Default value
+            className='dropdown',
+            style={'backgroundColor': '#FFF', 'color': '#000', 'border': '1px solid #CCC', 'borderRadius': '4px', 'padding': '5px', 'marginBottom': '10px'}
+        ),
+        
+        dcc.Dropdown(
+            id='timeframe-selector',
+            options=[
+                {'label': '1 Minute', 'value': '1m'},
+                {'label': '5 Minutes', 'value': '5m'},
+                {'label': '15 Minutes', 'value': '15m'},
+                {'label': '30 Minutes', 'value': '30m'},
+                {'label': '4 Hours', 'value': '4h'},
+                {'label': 'Daily', 'value': '1d'},
+                {'label': 'Weekly', 'value': '1wk'},
+                {'label': 'Monthly', 'value': '1mo'},
+                {'label': '3 Months', 'value': '3mo'},
+                {'label': '6 Months', 'value': '6mo'},
+                {'label': '1 Year', 'value': '1y'},
+                {'label': '3 Years', 'value': '3y'},
+                {'label': '5 Years', 'value': '5y'}
+            ],
+            value='1d',  # Default value
+            className='dropdown',
+            style={'backgroundColor': '#FFF', 'color': '#000', 'border': '1px solid #CCC', 'borderRadius': '4px', 'padding': '5px', 'marginBottom': '20px'}
+        ),
 
-    # 3D Plot - RSI vs MACD vs Close
-    dcc.Graph(id='3d-plot',
-              figure=px.scatter_3d(data, x='RSI', y='MACD', z='Close', color='Market_trend',
-                                   title='3D Plot of RSI vs MACD vs Close')),
-
-    # Histogram - Rolling Standard Deviation
-    dcc.Graph(id='histogram',
-              figure=px.histogram(data, x='rolling_std_7', title="Distribution of Rolling Standard Deviation")),
-
-    # Pie Chart - Volume Category Distribution
-    dcc.Graph(id='pie-chart',
-              figure=px.pie(data, names='Volume_category', title="Volume Category Distribution")),
-
-    # Treemap - Volume by Day of Week and Category
-    dcc.Graph(id='treemap',
-              figure=px.treemap(data, path=['Volume_category', 'Day_of_week'], values='Volume',
-                                title="Treemap of Volume by Category and Day of Week")),
+        dcc.Checklist(
+            id='compare-indexes',
+            options=[
+                {'label': 'Compare with S&P 500', 'value': '^GSPC'},
+                {'label': 'Compare with NASDAQ', 'value': '^IXIC'}
+            ],
+            value=[],
+            style={'color': 'white'}
+        ),
+        
+        dcc.Graph(id='comparison-chart')
+    ], className='container', style={'backgroundColor': '#2E2E2E', 'color': 'white'})
 ])
 
+@app.callback(
+    Output('summary-content', 'children'),
+    [Input('bullish-button', 'n_clicks'),
+     Input('bearish-button', 'n_clicks'),
+     Input('top10-button', 'n_clicks'),
+     Input('crypto-button', 'n_clicks')]
+)
+def update_summary(bullish_clicks, bearish_clicks, top10_clicks, crypto_clicks):
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return "Click a button to see the stocks."
+    else:
+        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == 'bullish-button':
+        return dash_table.DataTable(
+            columns=[{'name': 'Bullish Stocks', 'id': 'Stock'}, {'name': 'Change %', 'id': 'Change %'}],
+            data=[{'Stock': stock, 'Change %': f"{round(change, 2)}%"} for stock, change in bullish_stocks.items() if not stock.endswith('-USD')],
+            style_cell={'textAlign': 'left', 'padding': '10px', 'backgroundColor': '#333', 'color': 'white'},
+            style_header={'backgroundColor': '#444', 'fontWeight': 'bold'},
+            style_table={'width': '25%', 'margin': '0 auto'}  # عرض جدول کاهش داده شده
+        )
+    elif button_id == 'bearish-button':
+        return dash_table.DataTable(
+            columns=[{'name': 'Bearish Stocks', 'id': 'Stock'}, {'name': 'Change %', 'id': 'Change %'}],
+            data=[{'Stock': stock, 'Change %': f"{round(change, 2)}%"} for stock, change in bearish_stocks.items() if not stock.endswith('-USD')],
+            style_cell={'textAlign': 'left', 'padding': '10px', 'backgroundColor': '#333', 'color': 'white'},
+            style_header={'backgroundColor': '#444', 'fontWeight': 'bold'},
+            style_table={'width': '25%', 'margin': '0 auto'}  # عرض جدول کاهش داده شده
+        )
+    elif button_id == 'top10-button':
+        return dash_table.DataTable(
+            columns=[{'name': 'Top 10 Growth Stocks', 'id': 'Stock'}, {'name': 'Change %', 'id': 'Change %'}],
+            data=[{'Stock': stock, 'Change %': f"{round(change, 2)}%"} for stock, change in top_growth_stocks.items() if not stock.endswith('-USD')],
+            style_cell={'textAlign': 'left', 'padding': '10px', 'backgroundColor': '#333', 'color': 'white'},
+            style_header={'backgroundColor': '#444', 'fontWeight': 'bold'},
+            style_table={'width': '25%', 'margin': '0 auto'}  # عرض جدول کاهش داده شده
+        )
+    elif button_id == 'crypto-button':
+        return dash_table.DataTable(
+            columns=[{'name': 'Cryptocurrencies', 'id': 'Cryptocurrencies'}, {'name': 'Change %', 'id': 'Change %'}],
+            data=[{'Cryptocurrencies': crypto, 'Change %': f"{round(change, 2)}%"} for crypto, change in pct_change.items() if crypto.endswith('-USD')],
+            style_cell={'textAlign': 'left', 'padding': '10px', 'backgroundColor': '#333', 'color': 'white'},
+            style_header={'backgroundColor': '#444', 'fontWeight': 'bold'},
+            style_table={'width': '25%', 'margin': '0 auto'}  # عرض جدول کاهش داده شده
+        )
+    return None
+
+@app.callback(
+    Output('comparison-chart', 'figure'),
+    [Input('sector-selector', 'value'),
+     Input('metric-selector', 'value'),
+     Input('timeframe-selector', 'value'),
+     Input('compare-indexes', 'value')]
+)
+def update_chart(selected_sectors, selected_metric, selected_timeframe, compare_indexes):
+    # Select data for the chosen sectors
+    filtered_dfs = []
+    overall_metrics = {}
+    for sector in selected_sectors:
+        if sector == 'Hardware':
+            filtered_dfs.append(hardware_metrics)
+            overall_metrics['Hardware Overall'] = hardware_metrics.mean()
+        elif sector == 'Software':
+            filtered_dfs.append(software_metrics)
+            overall_metrics['Software Overall'] = software_metrics.mean()
+        elif sector == 'Digital Media':
+            filtered_dfs.append(digital_media_metrics)
+            overall_metrics['Digital Media Overall'] = digital_media_metrics.mean()
+    
+    filtered_df = pd.concat(filtered_dfs)
+    
+    # Add overall metrics if specific sectors are selected
+    if 'Hardware' in selected_sectors:
+        filtered_df = pd.concat([filtered_df, pd.DataFrame(overall_metrics['Hardware Overall'], columns=['Hardware Overall']).T])
+    if 'Software' in selected_sectors:
+        filtered_df = pd.concat([filtered_df, pd.DataFrame(overall_metrics['Software Overall'], columns=['Software Overall']).T])
+    if 'Digital Media' in selected_sectors:
+        filtered_df = pd.concat([filtered_df, pd.DataFrame(overall_metrics['Digital Media Overall'], columns=['Digital Media Overall']).T])
+
+    # Add S&P 500 and NASDAQ indices for comparison (if selected)
+    if compare_indexes:
+        for index in compare_indexes:
+            filtered_df = pd.concat([filtered_df, index_metrics.loc[[index]]])
+
+    # Convert metric to numeric for plotting
+    filtered_df[selected_metric] = pd.to_numeric(filtered_df[selected_metric], errors='coerce')
+    filtered_df = filtered_df.dropna(subset=[selected_metric])
+
+    # Create comparison chart based on the selected metric
+    comparison_fig = px.bar(
+        filtered_df,
+        x=filtered_df.index,
+        y=selected_metric,
+        color=filtered_df.index,
+        title=f"Comparison of {selected_metric} in Selected Sectors",
+        template='plotly_dark'  # تم جدید با رنگ تیره اما روشن‌تر
+    )
+
+    return comparison_fig
+
 if __name__ == '__main__':
-    app.run_server(debug=True, port=80)
+    app.run_server(debug=True)
