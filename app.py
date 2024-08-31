@@ -3,6 +3,9 @@ from dash import dcc, html, Input, Output, dash_table
 import plotly.express as px
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
+
+
 
 # Lists of stocks in different sectors
 hardware_tickers = ['AAPL', 'NVDA', 'INTC']
@@ -21,11 +24,22 @@ def fetch_stock_data(tickers):
     data = data.ffill().bfill()
     return data
 
+# Function to fetch stock data for line chart
+def fetch_stock_data_line_chart(tickers, period="5d"):
+    data = yf.download(tickers, period=period)
+    data = data.ffill().bfill()
+    return data
+
+#line chart variables
+line_chart_top_companies = ['AAPL', 'NVDA', 'MSFT', 'GOOGL', 'AMZN']
+top_companies_data = fetch_stock_data_line_chart(line_chart_top_companies, period="5y")['Close'] 
+
 # Fetch data for each sector and cryptocurrencies
 hardware_data = fetch_stock_data(hardware_tickers)
 software_data = fetch_stock_data(software_tickers)
 digital_media_data = fetch_stock_data(digital_media_tickers)
 crypto_data = fetch_stock_data(crypto_tickers)
+
 
 # Combine all data
 all_data = pd.concat([hardware_data, software_data, digital_media_data, crypto_data], axis=1)
@@ -162,7 +176,69 @@ app.layout = html.Div(style={'backgroundColor': '#2E2E2E', 'color': 'white', 'fo
         ),
         
         dcc.Graph(id='comparison-chart')
-    ], className='container', style={'backgroundColor': '#2E2E2E', 'color': 'white'})
+    ], className='container', style={'backgroundColor': '#2E2E2E', 'color': 'white', 'marginBottom': '60px'}),
+  
+    
+     # Dropdown for selecting companies and line chart for growth
+    html.Div([
+
+        html.Div([
+            html.Div([
+                html.Hr(style={'backgroundColor':'#FFF', 'marginBottom':'60px'}),
+            ], className='col'),
+        ], className='row'),
+
+        html.Div([
+            html.Div([
+                html.H3(style={'marginBottom':'30px'}),
+            ], className='col'),
+        ], className='row'),
+
+        html.Div([
+
+            html.Div([
+                dcc.Dropdown(
+                            id='line-chart-company-selector',
+                            options=[{'label': company, 'value': company} for company in line_chart_top_companies],
+                            value=line_chart_top_companies,  # Default value to show all companies
+                            multi=True,  # Allow multiple selections
+                            className='dropdown',
+                            style={'color': '#000', 'borderRadius': '4px', 'padding': '5px', 'marginBottom': '10px'}
+                        ),
+            ], className='col'),
+            html.Div([
+                dcc.Dropdown(
+                            id='line-chart-comparison-selector',
+                            options=[{'label': company, 'value': company} for company in line_chart_top_companies],
+                            value=line_chart_top_companies[0],  # Default comparison company
+                            style={'color': '#000', 'borderRadius': '4px', 'padding': '5px', 'marginBottom': '10px'}
+                        ),
+            ], className='col')
+        ], className='row'),
+
+        html.Div([
+            html.Div([
+                dcc.Checklist(
+                                id='line-chart-aggregate-selector',
+                                options=[
+                                    {'label': 'Aggregate Growth', 'value': 'aggregate'}
+                                ],
+                                value=[],  # Default value is not checked
+                                style={'color': '#FFF', 'margin': '10px'}
+                            ),
+            ], className='col'),
+            
+        ], className='row'),
+        
+        
+       
+
+       
+
+       
+
+        dcc.Graph(id='line-chart', className='graph-container', style={'backgroundColor': '#000000'})
+    ], className='container', style={'color': 'white'})
 ])
 
 @app.callback(
@@ -266,6 +342,39 @@ def update_chart(selected_sectors, selected_metric, selected_timeframe, compare_
     )
 
     return comparison_fig
+
+
+# Callback to update the line chart based on company selection, aggregation option, and comparison company
+@app.callback(
+    Output('line-chart', 'figure'),
+    [Input('line-chart-company-selector', 'value'),
+     Input('line-chart-aggregate-selector', 'value'),
+     Input('line-chart-comparison-selector', 'value')]
+)
+def update_line_chart(selected_companies, aggregate_option, comparison_company):
+    if not selected_companies:
+        return {}
+
+    fig = go.Figure()
+
+    if 'aggregate' in aggregate_option:
+        if len(selected_companies) > 2:
+            top_companies_subset = [comp for comp in selected_companies if comp != comparison_company]
+            avg_prices = top_companies_data[top_companies_subset].mean(axis=1)
+            fig.add_trace(go.Scatter(x=top_companies_data.index, y=avg_prices, mode='lines', name='Average of Selected'))
+
+            if comparison_company:
+                fig.add_trace(go.Scatter(x=top_companies_data.index, y=top_companies_data[comparison_company], mode='lines', name=comparison_company))
+        else:
+            fig.add_trace(go.Scatter(x=top_companies_data.index, y=top_companies_data[selected_companies[0]], mode='lines', name='Selected Company'))
+    else:
+        for company in selected_companies:
+            fig.add_trace(go.Scatter(x=top_companies_data.index, y=top_companies_data[company], mode='lines', name=company))
+
+    fig.update_layout(title='5-Year Growth of Top Companies', xaxis_title='Date', yaxis_title='Stock Price',
+                      plot_bgcolor='#2E2E2E', paper_bgcolor='#2E2E2E', font_color='white')
+
+    return fig
 
 if __name__ == '__main__':
     app.run_server(debug=True)
